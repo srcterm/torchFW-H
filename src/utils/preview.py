@@ -1,0 +1,285 @@
+"""Preview utility for FW-H solver setup visualization and diagnostics."""
+
+from typing import Optional
+import torch
+
+from ..surfaces.parametric import PermeableSurface, cylinder, sphere, box
+from ..surfaces.observers import ObserverArray
+from ..loaders.base import CFDLoader
+from ..solver.interpolation import ScatteredInterpolator
+from ..postprocessing.plots import plot_setup, HAS_PYVISTA
+from .config import FWHConfig
+
+
+def create_surface(config: FWHConfig) -> PermeableSurface:
+    """Create permeable surface from configuration."""
+    surf_cfg = config.surface
+
+    if surf_cfg.type == 'cylinder':
+        return cylinder(
+            radius=surf_cfg.radius,
+            length=surf_cfg.length,
+            center=surf_cfg.center,
+            n_theta=surf_cfg.n_theta,
+            n_z=surf_cfg.n_z,
+            axis=surf_cfg.axis,
+            caps=surf_cfg.caps,
+            n_cap_radial=surf_cfg.n_cap_radial
+        )
+    elif surf_cfg.type == 'sphere':
+        return sphere(
+            radius=surf_cfg.radius,
+            center=surf_cfg.center,
+            n_theta=surf_cfg.n_theta,
+            n_phi=surf_cfg.n_phi
+        )
+    elif surf_cfg.type == 'box':
+        return box(
+            extents=surf_cfg.extents,
+            center=surf_cfg.center,
+            n_per_side=surf_cfg.n_per_side
+        )
+    else:
+        raise ValueError(f"Unknown surface type: {surf_cfg.type}")
+
+
+def create_observers(config: FWHConfig) -> ObserverArray:
+    """Create observer array from configuration."""
+    obs_cfg = config.observers
+
+    if obs_cfg.type == 'arc':
+        return ObserverArray.arc(
+            radius=obs_cfg.radius,
+            n=obs_cfg.n,
+            plane=obs_cfg.plane,
+            center=obs_cfg.center,
+            theta_range=obs_cfg.theta_range
+        )
+    elif obs_cfg.type == 'sphere':
+        return ObserverArray.sphere(
+            radius=obs_cfg.radius,
+            n_theta=obs_cfg.n_theta,
+            n_phi=obs_cfg.n_phi,
+            center=obs_cfg.center
+        )
+    elif obs_cfg.type == 'line':
+        return ObserverArray.line(
+            start=obs_cfg.start,
+            end=obs_cfg.end,
+            n=obs_cfg.n
+        )
+    elif obs_cfg.type == 'file':
+        return ObserverArray.from_file(obs_cfg.file_path)
+    else:
+        raise ValueError(f"Unknown observer type: {obs_cfg.type}")
+
+
+def create_loader(config: FWHConfig) -> CFDLoader:
+    """Create CFD data loader from configuration."""
+    data_cfg = config.data
+
+    if data_cfg.format == 'xdmf':
+        from ..loaders.xdmf import XDMFLoader
+        return XDMFLoader(
+            path=data_cfg.path,
+            field_mapping=data_cfg.field_mapping or None
+        )
+    else:
+        raise ValueError(f"Unknown data format: {data_cfg.format}")
+
+
+def suggest_f_max(surface: PermeableSurface, c0: float) -> float:
+    """
+    Suggest cutoff frequency based on surface resolution.
+
+    Uses 6 points per wavelength criterion:
+    f_max = c0 / (6 * mean_spacing)
+
+    Args:
+        surface: PermeableSurface
+        c0: Speed of sound
+
+    Returns:
+        Suggested maximum frequency (Hz)
+    """
+    spacing = surface.mean_spacing
+    if spacing <= 0:
+        return float('inf')
+    return c0 / (6 * spacing)
+
+
+def preview(
+    config: FWHConfig,
+    loader: Optional[CFDLoader] = None,
+    interactive: bool = True,
+    save_path: Optional[str] = None
+) -> dict:
+    """
+    Visualize FW-H setup and print diagnostics.
+
+    Args:
+        config: FWHConfig specifying the case
+        loader: Optional pre-created CFDLoader (created from config if None)
+        interactive: Whether to show interactive visualization
+        save_path: Optional path to save screenshot
+
+    Returns:
+        Dict with computed parameters and diagnostics
+    """
+    # Create surface and observers
+    surface = create_surface(config)
+    observers = create_observers(config)
+
+    # Create or use provided loader
+    if loader is None:
+        loader = create_loader(config)
+
+    meta = loader.metadata
+    c0 = config.case.c0
+
+    # Compute derived parameters
+    f_max_suggested = suggest_f_max(surface, c0)
+    f_nyquist = 0.5 / meta.dt if meta.dt > 0 else float('inf')
+
+    # Observer time range estimate
+    r = torch.cdist(surface.points, observers.positions)
+    r_min, r_max = r.min().item(), r.max().item()
+    t_obs_min = meta.times[0].item() + r_min / c0
+    t_obs_max = meta.times[-1].item() + r_max / c0
+    n_obs_samples = int((t_obs_max - t_obs_min) / meta.dt) + 1 if meta.dt > 0 else 0
+
+    # Memory estimates
+    N_s = surface.n_points
+    N_t = meta.n_timesteps
+    N_o = observers.n_observers
+
+    surface_data_gb = (5 * N_s * N_t * 4) / 1e9  # 5 fields, float32
+    output_data_gb = (N_o * n_obs_samples * 4) / 1e9
+
+    # Print summary
+    print("=" * 60)
+    print("FW-H Setup Summary")
+    print("=" * 60)
+    print()
+    print(f"Surface ({config.surface.type}):")
+    print(f"  Points:       {N_s:,}")
+    print(f"  Total area:   {surface.total_area:.4f} m²")
+    print(f"  Mean spacing: {surface.mean_spacing:.6f} m")
+    print(f"  Bounds:       {surface.bounds[0].tolist()} to {surface.bounds[1].tolist()}")
+    print()
+    print(f"Observers ({config.observers.type}):")
+    print(f"  Count:        {N_o}")
+    if config.observers.type in ('arc', 'sphere'):
+        print(f"  Radius:       {config.observers.radius:.1f} m")
+    print()
+    print(f"CFD Data ({config.data.format}):")
+    print(f"  Points:       {meta.n_points:,}")
+    print(f"  Timesteps:    {N_t}")
+    print(f"  dt:           {meta.dt:.6e} s", end="")
+    if not meta.uniform_dt:
+        print(" (non-uniform!)")
+    else:
+        print()
+    print(f"  Time range:   [{meta.times[0].item():.6f}, {meta.times[-1].item():.6f}] s")
+    print(f"  Fields:       {meta.field_names}")
+    print()
+    print("Derived Parameters:")
+    print(f"  f_max (suggested): {f_max_suggested:.1f} Hz")
+    print(f"  f_nyquist:         {f_nyquist:.1f} Hz")
+    print(f"  Observer t range:  [{t_obs_min:.6f}, {t_obs_max:.6f}] s ({n_obs_samples} samples)")
+    print()
+    print("Memory Estimates:")
+    print(f"  Surface time series: {surface_data_gb:.3f} GB")
+    print(f"  Output signals:      {output_data_gb:.3f} GB")
+    print("=" * 60)
+
+    # Visualization
+    if interactive or save_path:
+        print("\nGenerating visualization...", end=" ", flush=True)
+        try:
+            plot_setup(
+                surface=surface,
+                observers=observers,
+                cfd_bounds=meta.bounds,
+                interactive=interactive,
+                save_path=save_path
+            )
+            print("Done." if not interactive else "")
+        except Exception as e:
+            print(f"Failed: {e}")
+            if not HAS_PYVISTA:
+                print("(PyVista not installed - using Matplotlib fallback)")
+
+    return {
+        'surface': surface,
+        'observers': observers,
+        'loader': loader,
+        'f_max_suggested': f_max_suggested,
+        'f_nyquist': f_nyquist,
+        'observer_time_range': (t_obs_min, t_obs_max),
+        'n_observer_samples': n_obs_samples,
+        'memory_gb': {
+            'surface_data': surface_data_gb,
+            'output': output_data_gb
+        }
+    }
+
+
+def test_interpolation(
+    config: FWHConfig,
+    loader: Optional[CFDLoader] = None,
+    field_name: str = 'p'
+) -> dict:
+    """
+    Test interpolation from CFD to surface and report diagnostics.
+
+    Args:
+        config: FWHConfig
+        loader: Optional pre-created loader
+        field_name: Field to interpolate for testing
+
+    Returns:
+        Dict with interpolation diagnostics
+    """
+    surface = create_surface(config)
+
+    if loader is None:
+        loader = create_loader(config)
+
+    # Get first snapshot
+    snapshot = loader.get_snapshot(0)
+
+    # Build interpolator
+    interp = ScatteredInterpolator.build(
+        source_points=snapshot.points,
+        target_points=surface.points,
+        k=config.interpolation.k,
+        length_scale=config.interpolation.length_scale
+    )
+
+    # Interpolate field
+    if field_name in snapshot.fields:
+        field = snapshot.fields[field_name]
+        interpolated = interp(field)
+
+        print(f"\nInterpolation Test ({field_name}):")
+        print(f"  Source points:  {snapshot.n_points:,}")
+        print(f"  Target points:  {surface.n_points:,}")
+        print(f"  k neighbors:    {interp.k}")
+        print(f"  Length scale:   {interp.length_scale:.6f}")
+        print(f"  Source range:   [{field.min().item():.4f}, {field.max().item():.4f}]")
+        print(f"  Interp range:   [{interpolated.min().item():.4f}, {interpolated.max().item():.4f}]")
+
+        diag = interp.diagnostics()
+        print(f"  Max weight (mean): {diag['max_weight_mean']:.4f}")
+        print(f"  Weight entropy:    {diag['weight_entropy_mean']:.4f}")
+
+        return {
+            'interpolator': interp,
+            'source_field': field,
+            'interpolated_field': interpolated,
+            'diagnostics': diag
+        }
+    else:
+        print(f"Warning: Field '{field_name}' not found. Available: {list(snapshot.fields.keys())}")
+        return {'interpolator': interp}

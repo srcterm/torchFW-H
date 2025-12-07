@@ -1,0 +1,42 @@
+{
+  "case": {
+    "c0": 340.0,
+    "rho0": 1.225
+  },
+  "surface": {
+    "type": "cylinder",
+    "radius": 1.5,
+    "length": 4.0,
+    "center": [1.0, 0.0, 3.0],
+    "axis": "x",
+    "n_theta": 64,
+    "n_z": 32,
+    "caps": true,
+    "n_cap_radial": 16
+  },
+  "observers": {
+    "type": "arc",
+    "radius": 10.0,
+    "n": 72,
+    "plane": "xy",
+    "center": [1.0, 0.0, 3.0],
+    "theta_range": [0.0, 360.0]
+  },
+  "data": {
+    "format": "xdmf",
+    "path": "./examples/validation/CYL",
+    "fields": ["rho", "U", "p"]
+  },
+  "interpolation": {
+    "k": 8,
+    "length_scale": "auto"
+  },
+  "solver": {
+    "f_max": "auto",
+    "chunk_size": 8192
+  },
+  "output": {
+    "path": "./results",
+    "format": "hdf5"
+  }
+}
