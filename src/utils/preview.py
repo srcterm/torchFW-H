@@ -312,3 +312,144 @@ def test_interpolation(
     else:
         print(f"Warning: Field '{field_name}' not found. Available: {list(snapshot.fields.keys())}")
         return {'interpolator': interp}
+
+
+# Required fields for FW-H solver
+FWH_FIELDS = ['rho', 'u', 'v', 'w', 'p']
+
+
+def test_interpolation_all(
+    config: FWHConfig,
+    loader: Optional[CFDLoader] = None,
+    save_stats: Optional[str] = None
+) -> dict:
+    """
+    Test interpolation of all FW-H fields across ALL timesteps.
+
+    Args:
+        config: FWHConfig
+        loader: Optional pre-created loader
+        save_stats: Optional path to save statistics CSV
+
+    Returns:
+        Dict with timing and field statistics per timestep
+    """
+    import time
+    import numpy as np
+
+    surface = create_surface(config)
+
+    if loader is None:
+        loader = create_loader(config)
+
+    meta = loader.metadata
+    n_steps = meta.n_timesteps
+
+    # Check which FW-H fields are available
+    snapshot0 = loader.get_snapshot(0)
+    available_fields = [f for f in FWH_FIELDS if f in snapshot0.fields]
+    missing_fields = [f for f in FWH_FIELDS if f not in snapshot0.fields]
+
+    if missing_fields:
+        print(f"Warning: Missing FW-H fields: {missing_fields}")
+    if not available_fields:
+        print("Error: No FW-H fields found!")
+        return {}
+
+    print(f"\nBuilding interpolator from {snapshot0.n_points:,} source points...")
+    t_build_start = time.perf_counter()
+
+    # Build interpolator ONCE (source points are fixed)
+    interp = ScatteredInterpolator.build(
+        source_points=snapshot0.points,
+        target_points=surface.points,
+        k=config.interpolation.k,
+        length_scale=config.interpolation.length_scale
+    )
+
+    t_build = time.perf_counter() - t_build_start
+    print(f"Interpolator built in {t_build:.2f} s\n")
+
+    # Initialize statistics tracking
+    stats = {
+        'timestep': [],
+        'time': [],
+        'interp_time': [],
+    }
+    for field in available_fields:
+        stats[f'{field}_min'] = []
+        stats[f'{field}_max'] = []
+        stats[f'{field}_mean'] = []
+
+    print(f"Testing interpolation across {n_steps} timesteps ({len(available_fields)} fields: {', '.join(available_fields)})...")
+
+    # Loop through all timesteps
+    for i in range(n_steps):
+        t_step_start = time.perf_counter()
+
+        snapshot = loader.get_snapshot(i)
+
+        # Interpolate all available FW-H fields
+        field_stats = []
+        for field_name in available_fields:
+            field = snapshot.fields[field_name]
+            interp_field = interp(field)
+
+            stats[f'{field_name}_min'].append(interp_field.min().item())
+            stats[f'{field_name}_max'].append(interp_field.max().item())
+            stats[f'{field_name}_mean'].append(interp_field.mean().item())
+
+            field_stats.append(f"{field_name}:[{interp_field.min().item():.2f},{interp_field.max().item():.2f}]")
+
+        t_step = time.perf_counter() - t_step_start
+
+        stats['timestep'].append(i)
+        stats['time'].append(snapshot.time)
+        stats['interp_time'].append(t_step)
+
+        # Progress output
+        print(f"[{i+1:3d}/{n_steps}] t={snapshot.time:.6f} | {t_step:.3f}s | {' '.join(field_stats)}")
+
+    # Summary statistics
+    interp_times = np.array(stats['interp_time'])
+    print(f"\n{'='*60}")
+    print("Summary")
+    print(f"{'='*60}")
+    print(f"Timesteps:      {n_steps}")
+    print(f"Fields:         {', '.join(available_fields)}")
+    print(f"Build time:     {t_build:.2f} s")
+    print(f"Total interp:   {interp_times.sum():.2f} s")
+    print(f"Mean per step:  {interp_times.mean():.3f} s")
+    print(f"Std:            {interp_times.std():.3f} s")
+    print()
+    print("Field Statistics (interpolated, across all timesteps):")
+    for field_name in available_fields:
+        f_min = min(stats[f'{field_name}_min'])
+        f_max = max(stats[f'{field_name}_max'])
+        f_mean = np.mean(stats[f'{field_name}_mean'])
+        print(f"  {field_name:4s}: min={f_min:10.4f}, max={f_max:10.4f}, mean={f_mean:10.4f}")
+
+    # Optionally save to CSV
+    if save_stats:
+        import csv
+        with open(save_stats, 'w', newline='') as f:
+            writer = csv.writer(f)
+            # Header
+            header = ['timestep', 'time', 'interp_time']
+            for field in available_fields:
+                header.extend([f'{field}_min', f'{field}_max', f'{field}_mean'])
+            writer.writerow(header)
+            # Data rows
+            for i in range(n_steps):
+                row = [stats['timestep'][i], stats['time'][i], stats['interp_time'][i]]
+                for field in available_fields:
+                    row.extend([stats[f'{field}_min'][i], stats[f'{field}_max'][i], stats[f'{field}_mean'][i]])
+                writer.writerow(row)
+        print(f"\nStatistics saved to: {save_stats}")
+
+    return {
+        'interpolator': interp,
+        'stats': stats,
+        'available_fields': available_fields,
+        'build_time': t_build
+    }

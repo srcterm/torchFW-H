@@ -128,6 +128,29 @@ def cmd_surface(args):
     return 0
 
 
+def cmd_test_interp_all(args):
+    """Test interpolation of all FW-H fields across all timesteps."""
+    from src.utils.config import load_config, validate_config
+    from src.utils.preview import test_interpolation_all
+
+    config = load_config(args.config)
+    issues = validate_config(config)
+
+    if issues:
+        print("Configuration issues:")
+        for issue in issues:
+            print(f"  - {issue}")
+        if not args.force:
+            print("\nUse --force to continue anyway.")
+            return 1
+
+    test_interpolation_all(
+        config=config,
+        save_stats=args.save_stats
+    )
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='PyTorch FW-H Aeroacoustics Solver',
@@ -203,6 +226,26 @@ def main():
     surface_parser.add_argument('--normals', action='store_true', help='Show normal vectors')
     surface_parser.add_argument('--no-plot', action='store_true')
 
+    # Test interpolation all command
+    interp_all_parser = subparsers.add_parser(
+        'test-interp-all',
+        help='Test interpolation of FW-H fields across all timesteps'
+    )
+    interp_all_parser.add_argument(
+        '--config', '-c',
+        required=True,
+        help='Path to configuration JSON file'
+    )
+    interp_all_parser.add_argument(
+        '--save-stats',
+        help='Save statistics to CSV file'
+    )
+    interp_all_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Continue even if config validation fails'
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -215,6 +258,8 @@ def main():
         return cmd_info(args)
     elif args.command == 'surface':
         return cmd_surface(args)
+    elif args.command == 'test-interp-all':
+        return cmd_test_interp_all(args)
     else:
         parser.print_help()
         return 1
