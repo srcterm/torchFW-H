@@ -7,8 +7,9 @@ from ..surfaces.parametric import PermeableSurface, cylinder, sphere, box
 from ..surfaces.observers import ObserverArray
 from ..loaders.base import CFDLoader
 from ..solver.interpolation import ScatteredInterpolator
-from ..postprocessing.plots import plot_setup, HAS_PYVISTA
+from ..postprocessing.plots import plot_setup, plot_setup_slices, HAS_PYVISTA
 from .config import FWHConfig
+import matplotlib.pyplot as plt
 
 
 def create_surface(config: FWHConfig) -> PermeableSurface:
@@ -193,9 +194,9 @@ def preview(
     print(f"  Output signals:      {output_data_gb:.3f} GB")
     print("=" * 60)
 
-    # Visualization
-    if interactive or save_path:
-        print("\nGenerating visualization...", end=" ", flush=True)
+    # 3D Visualization
+    if config.preview.show_3d and (interactive or save_path):
+        print("\nGenerating 3D visualization...", end=" ", flush=True)
         try:
             plot_setup(
                 surface=surface,
@@ -209,6 +210,38 @@ def preview(
             print(f"Failed: {e}")
             if not HAS_PYVISTA:
                 print("(PyVista not installed - using Matplotlib fallback)")
+
+    # 2D Slice plots
+    if config.preview.show_slices:
+        print("\nGenerating 2D slice plots...", end=" ", flush=True)
+        try:
+            # Load first snapshot for slice plots
+            snapshot = loader.get_snapshot(0)
+
+            # Get slice fields from config
+            slice_fields = config.preview.slice_fields
+
+            # Generate slice save path if main save_path is set
+            slice_save_path = None
+            if config.preview.save_path:
+                slice_save_path = config.preview.save_path
+
+            fig = plot_setup_slices(
+                snapshot=snapshot,
+                surface=surface,
+                observers=observers,
+                fields=slice_fields,
+                save_path=slice_save_path
+            )
+            print("Done.")
+
+            if interactive:
+                plt.show()
+
+        except Exception as e:
+            print(f"Failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     return {
         'surface': surface,

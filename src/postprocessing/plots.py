@@ -412,3 +412,180 @@ def plot_setup(
             plt.show()
 
         return None
+
+def plot_setup_slices(
+        snapshot: 'CFDSnapshot',
+        surface: 'PermeableSurface',
+        observers: 'ObserverArray',
+        fields: list[str] = None,
+        slice_coords: dict = None,
+        figsize: Tuple[int, int] = (15, 8),
+        save_path: Optional[str] = None
+    ) -> plt.Figure:
+        """
+        Plot 2D slice views of the FW-H setup showing levelset, surface, and observers.
+
+        Creates 3 subplots for XY, XZ, YZ planes showing levelset field with overlaid
+        FW-H surface and observer positions.
+
+        Args:
+            snapshot: CFDSnapshot containing field data (must have 'levelset')
+            surface: PermeableSurface to overlay
+            observers: ObserverArray to overlay
+            fields: Ignored (kept for compatibility)
+            slice_coords: Dict with slice coordinates {'xy': z, 'xz': y, 'yz': x}.
+                            If None, uses geometry center.
+            figsize: Figure size
+            save_path: Optional path to save figure
+
+        Returns:
+            Matplotlib figure
+        """
+        # Only plot levelset
+        if 'levelset' not in snapshot.fields:
+            raise ValueError("snapshot must contain 'levelset' field")
+        
+        available_fields = ['levelset']
+
+        points = _tensor_to_numpy(snapshot.points)
+        surf_pts = _tensor_to_numpy(surface.points)
+        obs_pts = _tensor_to_numpy(observers.positions)
+
+        # Compute domain bounds
+        x_min, y_min, z_min = points.min(axis=0)
+        x_max, y_max, z_max = points.max(axis=0)
+
+        print(f"  CFD domain: X=[{x_min:.2f}, {x_max:.2f}], Y=[{y_min:.2f}, {y_max:.2f}], Z=[{z_min:.2f}, {z_max:.2f}]")
+
+        # Find geometry center from levelset=0
+        if 'levelset' in snapshot.fields:
+            levelset = _tensor_to_numpy(snapshot.fields['levelset'])
+            near_zero = np.abs(levelset) < 0.1
+            if near_zero.any():
+                geom_pts = points[near_zero]
+                geom_center = geom_pts.mean(axis=0)
+                print(f"  Geometry center (from levelset): ({geom_center[0]:.2f}, {geom_center[1]:.2f}, {geom_center[2]:.2f})")
+            else:
+                geom_center = np.array([0,0,0]) #np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
+        else:
+            geom_center = np.array([0,0,0]) #np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
+
+        # Default slice coordinates: geometry center (not domain center)
+        if slice_coords is None:
+            slice_coords = {
+                'xy': geom_center[2],  # z at geometry center
+                'xz': geom_center[1],  # y at geometry center
+                'yz': geom_center[0]   # x at geometry center
+            }
+        print(f"  Slice coords: XY@z={slice_coords['xy']:.2f}, XZ@y={slice_coords['xz']:.2f}, YZ@x={slice_coords['yz']:.2f}")
+
+        # Plane definitions: (normal_axis, u_axis, v_axis, xlabel, ylabel)
+        planes = {
+            'xy': (2, 0, 1, 'X', 'Y'),
+            'xz': (1, 0, 2, 'X', 'Z'),
+            'yz': (0, 1, 2, 'Y', 'Z')
+        }
+
+        n_planes = 3
+
+        fig, axes = plt.subplots(1, n_planes, figsize=figsize)
+        axes = axes.flatten()
+
+        # Compute tolerance for slice extraction based on grid spacing
+        # Use larger multiplier for better geometry visualization (more points in slice)
+        unique_x = np.unique(points[:, 0])
+        unique_y = np.unique(points[:, 1])
+        unique_z = np.unique(points[:, 2])
+
+        dx = np.diff(unique_x).mean() if len(unique_x) > 1 else 0.1
+        dy = np.diff(unique_y).mean() if len(unique_y) > 1 else 0.1
+        dz = np.diff(unique_z).mean() if len(unique_z) > 1 else 0.1
+
+        tolerances = {
+            'xy': dz * 3.0,   # Larger tolerance for better coverage
+            'xz': dy * 3.0,
+            'yz': dx * 3.0
+        }
+
+        for col, (plane_name, (normal_axis, u_axis, v_axis, xlabel, ylabel)) in enumerate(planes.items()):
+            ax = axes[col]
+            coord = slice_coords[plane_name]
+            tol = tolerances[plane_name]
+
+            # Extract CFD points near slice
+            mask = np.abs(points[:, normal_axis] - coord) < tol
+            n_points = mask.sum()
+
+            if not mask.any():
+                ax.text(0.5, 0.5, f'No data at {plane_name}={coord:.2f}',
+                        ha='center', va='center', transform=ax.transAxes)
+                continue
+
+            print(f"  {plane_name.upper()} slice: {n_points} points extracted (tol={tol:.4f})")
+
+            u_cfd = points[mask, u_axis]
+            v_cfd = points[mask, v_axis]
+
+            # Get levelset values for this slice
+            levelset_slice = _tensor_to_numpy(snapshot.fields['levelset'])[mask]
+            
+            print(f"    levelset: min={levelset_slice.min():.4f}, max={levelset_slice.max():.4f}")
+
+            # Surface points near slice
+            surf_tol = tol * 5
+            surf_mask = np.abs(surf_pts[:, normal_axis] - coord) < surf_tol
+            u_surf = surf_pts[surf_mask, u_axis] if surf_mask.any() else np.array([])
+            v_surf = surf_pts[surf_mask, v_axis] if surf_mask.any() else np.array([])
+
+            # All observer positions (projected)
+            u_obs = obs_pts[:, u_axis]
+            v_obs = obs_pts[:, v_axis]
+
+            # Draw domain outline (rectangle)
+            u_min, u_max = u_cfd.min(), u_cfd.max()
+            v_min, v_max = v_cfd.min(), v_cfd.max()
+            rect = plt.Rectangle((u_min, v_min), u_max - u_min, v_max - v_min,
+                                   fill=False, edgecolor='gray', linewidth=1.5, linestyle='-', zorder=1)
+            ax.add_patch(rect)
+
+            # Plot geometry (levelset < 0) as solid black
+            geom_mask = levelset_slice < 0
+            if geom_mask.any():
+                ax.scatter(u_cfd[geom_mask], v_cfd[geom_mask], c='black', s=5,
+                            alpha=1.0, label='Geometry', zorder=5)
+
+            # FW-H surface
+            if len(u_surf) > 0:
+                ax.scatter(u_surf, v_surf, c='cyan', s=2, marker='o',
+                            edgecolors='blue', linewidths=0.7, label='FW-H Surface', zorder=10)
+
+            # Observers
+            ax.scatter(u_obs, v_obs, c='lime', s=5, marker='^',
+                        edgecolors='darkgreen', linewidths=1.5, label='Observers', zorder=11)
+
+            ax.set_xlabel(f'{xlabel} (m)', fontsize=12)
+            ax.set_ylabel(f'{ylabel} (m)', fontsize=12)
+            
+            # Set same axis limits for all plots based on full domain + observers
+            all_u = np.concatenate([u_cfd, u_obs])
+            all_v = np.concatenate([v_cfd, v_obs])
+            margin = 0.5
+            ax.set_xlim(all_u.min() - margin, all_u.max() + margin)
+            ax.set_ylim(all_v.min() - margin, all_v.max() + margin)
+            ax.set_aspect('equal')
+
+            axis_name = 'XYZ'[normal_axis]
+            ax.set_title(f'{plane_name.upper()} Slice @ {axis_name}={coord:.2f}', fontsize=13, fontweight='bold')
+
+            ax.grid(True, alpha=0.3, linestyle='--')
+
+            if col == 0:
+                ax.legend(loc='upper right', fontsize=10)
+
+        plt.tight_layout()
+
+        if save_path:
+            plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Saved slice plot to: {save_path}")
+
+        return fig

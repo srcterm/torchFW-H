@@ -169,7 +169,8 @@ class XDMFLoader(CFDLoader):
         cell_z = 0.5 * (coords[2][:-1] + coords[2][1:])
 
         # Create meshgrid of cell centers
-        # Note: XDMF uses Fortran ordering (z varies fastest in memory)
+        # XDMF data is stored as (Nz, Ny, Nx), so create meshgrid in that order
+        # meshgrid with indexing='ij' creates arrays of shape (len(arg0), len(arg1), len(arg2))
         zz, yy, xx = np.meshgrid(cell_z, cell_y, cell_x, indexing='ij')
         points = torch.tensor(
             np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1),
@@ -190,14 +191,13 @@ class XDMFLoader(CFDLoader):
 
             if name == 'velocity':
                 # Vector field: (Nz, Ny, Nx, 3) -> u, v, w each (N,)
-                # Transpose to match point ordering
-                data = data.transpose(2, 1, 0, 3)  # -> (Nx, Ny, Nz, 3)
+                # Data order matches point order (Nz, Ny, Nx)
                 fields['u'] = torch.tensor(data[..., 0].ravel(), dtype=torch.float32)
                 fields['v'] = torch.tensor(data[..., 1].ravel(), dtype=torch.float32)
                 fields['w'] = torch.tensor(data[..., 2].ravel(), dtype=torch.float32)
             else:
                 # Scalar field: (Nz, Ny, Nx) -> (N,)
-                data = data.transpose(2, 1, 0)  # -> (Nx, Ny, Nz)
+                # Data order matches point order (Nz, Ny, Nx)
                 mapped_name = self.field_mapping.get(name, name)
                 fields[mapped_name] = torch.tensor(data.ravel(), dtype=torch.float32)
 

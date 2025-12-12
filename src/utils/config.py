@@ -97,6 +97,15 @@ class OutputConfig:
 
 
 @dataclass
+class PreviewConfig:
+    """Preview/visualization settings."""
+    show_3d: bool = True  # Show 3D PyVista plot
+    show_slices: bool = False  # Show 2D slice plots (XY, XZ, YZ)
+    slice_fields: list = field(default_factory=lambda: ['levelset', 'p'])
+    save_path: Optional[str] = None  # Save plots to this path
+
+
+@dataclass
 class FWHConfig:
     """Complete FW-H solver configuration."""
     case: CaseConfig = field(default_factory=CaseConfig)
@@ -106,6 +115,7 @@ class FWHConfig:
     interpolation: InterpolationConfig = field(default_factory=InterpolationConfig)
     solver: SolverConfig = field(default_factory=SolverConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    preview: PreviewConfig = field(default_factory=PreviewConfig)
 
 
 def _dict_to_dataclass(d: dict, cls):
@@ -150,6 +160,7 @@ def load_config(path: str | Path) -> FWHConfig:
         interpolation=_dict_to_dataclass(data.get('interpolation'), InterpolationConfig),
         solver=_dict_to_dataclass(data.get('solver'), SolverConfig),
         output=_dict_to_dataclass(data.get('output'), OutputConfig),
+        preview=_dict_to_dataclass(data.get('preview'), PreviewConfig),
     )
 
     return config
