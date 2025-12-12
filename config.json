@@ -38,5 +38,10 @@
   "output": {
     "path": "./results",
     "format": "hdf5"
+  },
+  "preview": {
+    "show_3d": true,
+    "show_slices": true,
+    "slice_fields": ["levelset", "p"]
   }
 }

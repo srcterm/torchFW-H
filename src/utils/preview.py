@@ -7,7 +7,7 @@ from ..surfaces.parametric import PermeableSurface, cylinder, sphere, box
 from ..surfaces.observers import ObserverArray
 from ..loaders.base import CFDLoader
 from ..solver.interpolation import ScatteredInterpolator
-from ..postprocessing.plots import plot_setup, plot_setup_slices, HAS_PYVISTA
+from ..postprocessing.plots import plot_setup, plot_setup_slices
 from .config import FWHConfig
 import matplotlib.pyplot as plt
 
@@ -190,26 +190,22 @@ def preview(
     print(f"  Observer t range:  [{t_obs_min:.6f}, {t_obs_max:.6f}] s ({n_obs_samples} samples)")
     print()
     print("Memory Estimates:")
-    print(f"  Surface time series: {surface_data_gb:.3f} GB")
-    print(f"  Output signals:      {output_data_gb:.3f} GB")
+    print(f"  Surface time series: {surface_data_gb:.4f} GB")
+    print(f"  Output signals:      {output_data_gb:.4f} GB")
     print("=" * 60)
 
     # 3D Visualization
     if config.preview.show_3d and (interactive or save_path):
         print("\nGenerating 3D visualization...", end=" ", flush=True)
-        try:
-            plot_setup(
-                surface=surface,
-                observers=observers,
-                cfd_bounds=meta.bounds,
-                interactive=interactive,
-                save_path=save_path
-            )
-            print("Done." if not interactive else "")
-        except Exception as e:
-            print(f"Failed: {e}")
-            if not HAS_PYVISTA:
-                print("(PyVista not installed - using Matplotlib fallback)")
+      
+        plot_setup(
+            surface=surface,
+            observers=observers,
+            cfd_bounds=meta.bounds,
+            interactive=interactive,
+            save_path=save_path
+        )
+        print("Done.")
 
     # 2D Slice plots
     if config.preview.show_slices:
