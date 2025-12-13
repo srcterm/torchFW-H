@@ -309,32 +309,35 @@ def plot_setup_slices(
         fields: list[str] = None,
         slice_coords: dict = None,
         figsize: Tuple[int, int] = (15, 8),
-        save_path: Optional[str] = None
+        save_path: Optional[str] = None,
+        show_geometry: bool = None
     ) -> plt.Figure:
         """
-        Plot 2D slice views of the FW-H setup showing levelset, surface, and observers.
+        Plot 2D slice views of the FW-H setup showing CFD domain, surface, and observers.
 
-        Creates 3 subplots for XY, XZ, YZ planes showing levelset field with overlaid
-        FW-H surface and observer positions.
+        Creates 3 subplots for XY, XZ, YZ planes with overlaid FW-H surface and
+        observer positions. If levelset field exists (e.g., from XDMF/JAXFluids),
+        also shows geometry as solid region.
 
         Args:
-            snapshot: CFDSnapshot containing field data (must have 'levelset')
+            snapshot: CFDSnapshot containing field data
             surface: PermeableSurface to overlay
             observers: ObserverArray to overlay
             fields: Ignored (kept for compatibility)
             slice_coords: Dict with slice coordinates {'xy': z, 'xz': y, 'yz': x}.
-                            If None, uses geometry center.
+                            If None, uses geometry center (if levelset) or domain center.
             figsize: Figure size
             save_path: Optional path to save figure
+            show_geometry: Whether to plot geometry from levelset.
+                           If None, auto-detects based on 'levelset' field presence.
 
         Returns:
             Matplotlib figure
         """
-        # Only plot levelset
-        if 'levelset' not in snapshot.fields:
-            raise ValueError("snapshot must contain 'levelset' field")
-        
-        available_fields = ['levelset']
+        # Auto-detect geometry plotting based on levelset availability
+        has_levelset = 'levelset' in snapshot.fields
+        if show_geometry is None:
+            show_geometry = has_levelset
 
         points = _tensor_to_numpy(snapshot.points)
         surf_pts = _tensor_to_numpy(surface.points)
@@ -346,8 +349,8 @@ def plot_setup_slices(
 
         print(f"  CFD domain: X=[{x_min:.2f}, {x_max:.2f}], Y=[{y_min:.2f}, {y_max:.2f}], Z=[{z_min:.2f}, {z_max:.2f}]")
 
-        # Find geometry center from levelset=0
-        if 'levelset' in snapshot.fields:
+        # Find geometry center from levelset=0 (if available), otherwise use domain center
+        if has_levelset:
             levelset = _tensor_to_numpy(snapshot.fields['levelset'])
             near_zero = np.abs(levelset) < 0.1
             if near_zero.any():
@@ -355,9 +358,11 @@ def plot_setup_slices(
                 geom_center = geom_pts.mean(axis=0)
                 print(f"  Geometry center (from levelset): ({geom_center[0]:.2f}, {geom_center[1]:.2f}, {geom_center[2]:.2f})")
             else:
-                geom_center = np.array([0,0,0]) #np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
+                geom_center = np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
         else:
-            geom_center = np.array([0,0,0]) #np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
+            # No levelset - use domain center for slices
+            geom_center = np.array([(x_min + x_max) / 2, (y_min + y_max) / 2, (z_min + z_max) / 2])
+            print(f"  Using domain center for slices (no levelset field)")
 
         # Default slice coordinates: geometry center (not domain center)
         if slice_coords is None:
@@ -415,10 +420,10 @@ def plot_setup_slices(
             u_cfd = points[mask, u_axis]
             v_cfd = points[mask, v_axis]
 
-            # Get levelset values for this slice
-            levelset_slice = _tensor_to_numpy(snapshot.fields['levelset'])[mask]
-            
-            # print(f"    levelset: min={levelset_slice.min():.4f}, max={levelset_slice.max():.4f}")
+            # Get levelset values for this slice (if available)
+            levelset_slice = None
+            if has_levelset:
+                levelset_slice = _tensor_to_numpy(snapshot.fields['levelset'])[mask]
 
             # Surface points near slice
             surf_tol = tol * 5
@@ -437,11 +442,12 @@ def plot_setup_slices(
                                    fill=False, edgecolor='gray', linewidth=1.5, linestyle='-', zorder=1)
             ax.add_patch(rect)
 
-            # Plot geometry (levelset < 0) as solid black
-            geom_mask = levelset_slice < 0
-            if geom_mask.any():
-                ax.scatter(u_cfd[geom_mask], v_cfd[geom_mask], c='black', s=5,
-                            alpha=1.0, label='Geometry', zorder=5)
+            # Plot geometry (levelset < 0) as solid black - only if levelset available
+            if show_geometry and levelset_slice is not None:
+                geom_mask = levelset_slice < 0
+                if geom_mask.any():
+                    ax.scatter(u_cfd[geom_mask], v_cfd[geom_mask], c='black', s=5,
+                                alpha=1.0, label='Geometry', zorder=5)
 
             # FW-H surface
             if len(u_surf) > 0:
