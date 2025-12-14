@@ -2,10 +2,119 @@
 
 from dataclasses import dataclass
 from typing import Tuple
+import math
 
 import torch
 from torch import Tensor
 import numpy as np
+
+
+def _estimate_knn_subsample_size(n_points: int) -> int:
+    """
+    Compute subsample size for mean spacing estimation.
+
+    Scales as sqrt(N) with bounds: min 1000, max 10000.
+    Reimplemented here to avoid circular import.
+    """
+    n_sample = int(math.sqrt(n_points) * 10)
+    return min(n_points, max(1000, min(n_sample, 10000)))
+
+
+def _get_available_memory(device: torch.device) -> float:
+    """Get available memory on device. Reimplemented to avoid circular import."""
+    if device.type == 'cuda':
+        free_mem, _ = torch.cuda.mem_get_info(device)
+        return free_mem * 0.7
+    elif device.type == 'mps':
+        try:
+            import psutil
+            return psutil.virtual_memory().available * 0.5
+        except ImportError:
+            return 4 * (1024**3)
+    else:
+        try:
+            import psutil
+            return psutil.virtual_memory().available * 0.6
+        except ImportError:
+            return 8 * (1024**3)
+
+
+def _compute_simple_chunks(n: int, device: torch.device) -> int:
+    """Compute chunk size for n×n distance matrix."""
+    available = _get_available_memory(device) * 0.5  # Use 50% for spacing estimate
+    bytes_per_pair = 4 * 1.5  # float32 + overhead
+    chunk = int(math.sqrt(available / bytes_per_pair))
+    return max(256, min(chunk, n))
+
+
+def _estimate_mean_spacing(points: Tensor, seed: int = 42) -> float:
+    """
+    Estimate mean nearest-neighbor spacing via subsampled k-NN.
+
+    Uses random subsampling with fixed seed for reproducibility.
+    Scales as O(sqrt(N)) instead of O(N²).
+
+    Args:
+        points: (N, 3) point positions
+        seed: Random seed for reproducibility
+
+    Returns:
+        Estimated mean nearest-neighbor distance
+    """
+    N = points.shape[0]
+    if N < 2:
+        return 0.0
+
+    # Determine subsample size (scales as sqrt(N))
+    n_sample = _estimate_knn_subsample_size(N)
+
+    # Subsample with fixed seed for reproducibility
+    generator = torch.Generator().manual_seed(seed)
+    if n_sample < N:
+        indices = torch.randperm(N, generator=generator)[:n_sample]
+        sample = points[indices]
+    else:
+        sample = points
+
+    n = sample.shape[0]
+    device = sample.device
+
+    # Compute chunk size for this subsample
+    chunk_size = _compute_simple_chunks(n, device)
+
+    # Find k=2 nearest neighbors (self + nearest) via chunked cdist
+    # We need k=2 because k=1 would just return self (distance=0)
+    k = 2
+    all_distances = torch.full((n, k), float('inf'), device=device)
+
+    for t0 in range(0, n, chunk_size):
+        t1 = min(t0 + chunk_size, n)
+        target_chunk_pts = sample[t0:t1]
+        n_chunk = t1 - t0
+
+        chunk_distances = torch.full((n_chunk, k), float('inf'), device=device)
+
+        for s0 in range(0, n, chunk_size):
+            s1 = min(s0 + chunk_size, n)
+            source_chunk_pts = sample[s0:s1]
+
+            dist = torch.cdist(target_chunk_pts, source_chunk_pts)
+
+            # Find k best in this source chunk
+            k_local = min(k, dist.shape[1])
+            local_dist, _ = torch.topk(dist, k_local, dim=1, largest=False)
+
+            # Merge with running best k
+            merged_dist = torch.cat([chunk_distances, local_dist], dim=1)
+            sorted_dist, _ = torch.sort(merged_dist, dim=1)
+            chunk_distances = sorted_dist[:, :k]
+
+        all_distances[t0:t1] = chunk_distances
+
+    # Return mean of nearest neighbor distance (column 1, since column 0 is self=0)
+    # Actually for self-distance, if point is in both source and target, distance=0
+    # So we take the second-smallest (index 1) which is the true nearest neighbor
+    return all_distances[:, 1].mean().item()
 
 
 @dataclass
@@ -55,12 +164,13 @@ class PermeableSurface:
 
     @property
     def mean_spacing(self) -> float:
-        """Mean nearest-neighbor distance between surface points."""
-        if self.n_points < 2:
-            return 0.0
-        dist = torch.cdist(self.points, self.points)
-        dist.fill_diagonal_(float('inf'))
-        return dist.min(dim=1).values.mean().item()
+        """
+        Mean nearest-neighbor distance between surface points.
+
+        Uses subsampled k-NN estimation for O(sqrt(N)) scaling
+        instead of O(N²) full distance matrix.
+        """
+        return _estimate_mean_spacing(self.points)
 
     @property
     def bounds(self) -> Tensor:

@@ -9,6 +9,8 @@ from ..loaders.base import CFDLoader
 from ..solver.interpolation import ScatteredInterpolator
 from ..postprocessing.plots import plot_setup, plot_setup_slices
 from .config import FWHConfig
+from .device import get_device
+from .memory import get_available_memory
 import matplotlib.pyplot as plt
 
 
@@ -257,7 +259,8 @@ def preview(
 def test_interpolation(
     config: FWHConfig,
     loader: Optional[CFDLoader] = None,
-    field_name: str = 'p'
+    field_name: str = 'p',
+    device: Optional[torch.device] = None
 ) -> dict:
     """
     Test interpolation from CFD to surface and report diagnostics.
@@ -266,24 +269,36 @@ def test_interpolation(
         config: FWHConfig
         loader: Optional pre-created loader
         field_name: Field to interpolate for testing
+        device: Target device (auto-detected if None)
 
     Returns:
         Dict with interpolation diagnostics
     """
+    # Resolve device
+    if device is None:
+        device = get_device(config.solver.device)
+
+    print(f"\nUsing device: {device}")
+    available_mem = get_available_memory(device) / (1024**3)
+    print(f"Available memory: {available_mem:.2f} GB")
+
     surface = create_surface(config)
+    surface = surface.to(device)
 
     if loader is None:
         loader = create_loader(config)
 
-    # Get first snapshot
+    # Get first snapshot and move to device
     snapshot = loader.get_snapshot(0)
+    snapshot = snapshot.to(device)
 
-    # Build interpolator
+    # Build interpolator (now auto-detects device from inputs)
     interp = ScatteredInterpolator.build(
         source_points=snapshot.points,
         target_points=surface.points,
         k=config.interpolation.k,
-        length_scale=config.interpolation.length_scale
+        length_scale=config.interpolation.length_scale,
+        device=device
     )
 
     # Interpolate field
@@ -292,6 +307,7 @@ def test_interpolation(
         interpolated = interp(field)
 
         print(f"\nInterpolation Test ({field_name}):")
+        print(f"  Device:         {device}")
         print(f"  Source points:  {snapshot.n_points:,}")
         print(f"  Target points:  {surface.n_points:,}")
         print(f"  k neighbors:    {interp.k}")
@@ -307,11 +323,12 @@ def test_interpolation(
             'interpolator': interp,
             'source_field': field,
             'interpolated_field': interpolated,
-            'diagnostics': diag
+            'diagnostics': diag,
+            'device': device
         }
     else:
         print(f"Warning: Field '{field_name}' not found. Available: {list(snapshot.fields.keys())}")
-        return {'interpolator': interp}
+        return {'interpolator': interp, 'device': device}
 
 
 # Required fields for FW-H solver
@@ -321,7 +338,8 @@ FWH_FIELDS = ['rho', 'u', 'v', 'w', 'p']
 def test_interpolation_all(
     config: FWHConfig,
     loader: Optional[CFDLoader] = None,
-    save_stats: Optional[str] = None
+    save_stats: Optional[str] = None,
+    device: Optional[torch.device] = None
 ) -> dict:
     """
     Test interpolation of all FW-H fields across ALL timesteps.
@@ -330,6 +348,7 @@ def test_interpolation_all(
         config: FWHConfig
         loader: Optional pre-created loader
         save_stats: Optional path to save statistics CSV
+        device: Target device (auto-detected if None)
 
     Returns:
         Dict with timing and field statistics per timestep
@@ -337,7 +356,16 @@ def test_interpolation_all(
     import time
     import numpy as np
 
+    # Resolve device
+    if device is None:
+        device = get_device(config.solver.device)
+
+    print(f"\nUsing device: {device}")
+    available_mem = get_available_memory(device) / (1024**3)
+    print(f"Available memory: {available_mem:.2f} GB")
+
     surface = create_surface(config)
+    surface = surface.to(device)
 
     if loader is None:
         loader = create_loader(config)
@@ -347,6 +375,8 @@ def test_interpolation_all(
 
     # Check which FW-H fields are available
     snapshot0 = loader.get_snapshot(0)
+    snapshot0 = snapshot0.to(device)
+
     available_fields = [f for f in FWH_FIELDS if f in snapshot0.fields]
     missing_fields = [f for f in FWH_FIELDS if f not in snapshot0.fields]
 
@@ -364,7 +394,8 @@ def test_interpolation_all(
         source_points=snapshot0.points,
         target_points=surface.points,
         k=config.interpolation.k,
-        length_scale=config.interpolation.length_scale
+        length_scale=config.interpolation.length_scale,
+        device=device
     )
 
     t_build = time.perf_counter() - t_build_start
@@ -388,6 +419,7 @@ def test_interpolation_all(
         t_step_start = time.perf_counter()
 
         snapshot = loader.get_snapshot(i)
+        snapshot = snapshot.to(device)
 
         # Interpolate all available FW-H fields
         field_stats = []
@@ -415,6 +447,7 @@ def test_interpolation_all(
     print(f"\n{'='*60}")
     print("Summary")
     print(f"{'='*60}")
+    print(f"Device:         {device}")
     print(f"Timesteps:      {n_steps}")
     print(f"Fields:         {', '.join(available_fields)}")
     print(f"Build time:     {t_build:.2f} s")
@@ -451,5 +484,6 @@ def test_interpolation_all(
         'interpolator': interp,
         'stats': stats,
         'available_fields': available_fields,
-        'build_time': t_build
+        'build_time': t_build,
+        'device': device
     }

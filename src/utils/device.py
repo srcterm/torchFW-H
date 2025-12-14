@@ -10,13 +10,14 @@ def get_device(preferred: str | None = None) -> torch.device:
     Priority: MPS (Apple Silicon) > CUDA > CPU
 
     Args:
-        preferred: Override automatic detection. One of 'mps', 'cuda', 'cpu'.
+        preferred: Override automatic detection. One of 'auto', 'mps', 'cuda', 'cpu'.
+                   'auto' or None uses automatic detection.
                    If the preferred device is unavailable, falls back to CPU.
 
     Returns:
         torch.device for computation
     """
-    if preferred is not None:
+    if preferred is not None and preferred.lower() != 'auto':
         preferred = preferred.lower()
         if preferred == 'mps' and torch.backends.mps.is_available():
             return torch.device('mps')

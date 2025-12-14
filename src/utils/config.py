@@ -84,7 +84,8 @@ class InterpolationConfig:
 class SolverConfig:
     """Solver settings."""
     f_max: Union[float, str] = 'auto'  # Cutoff frequency
-    chunk_size: int = 8192  # Memory chunking size
+    chunk_size: int = 8192  # Memory chunking size (legacy, now auto-computed)
+    device: str = 'auto'  # 'auto', 'cuda', 'mps', or 'cpu'
 
 
 @dataclass
