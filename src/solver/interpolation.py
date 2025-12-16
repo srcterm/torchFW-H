@@ -233,6 +233,8 @@ class ScatteredInterpolator:
                 if device.type == 'mps':
                     torch.mps.empty_cache()
 
+                print(f'    Processed source points: {s1:,} / {N_source:,}', end='\r')
+
             # Store results for this target chunk
             all_distances[t0:t1] = chunk_distances
             all_indices[t0:t1] = chunk_indices
