@@ -84,8 +84,7 @@ def cmd_info(args):
 def cmd_surface(args):
     """Generate and visualize a surface."""
     from src.surfaces.parametric import cylinder, sphere, box
-    from src.postprocessing.plots import plot_surface, HAS_PYVISTA
-    import matplotlib.pyplot as plt
+    from src.postprocessing.plots import plot_surface
 
     if args.type == 'cylinder':
         surface = cylinder(
@@ -120,10 +119,8 @@ def cmd_surface(args):
 
     if not args.no_plot:
         plotter = plot_surface(surface, show_normals=args.normals)
-        if HAS_PYVISTA and plotter is not None:
+        if plotter is not None:
             plotter.show()
-        elif not HAS_PYVISTA:
-            plt.show()
 
     return 0
 
