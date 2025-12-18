@@ -135,3 +135,40 @@ class CFDLoader(ABC):
             if i == index:
                 return snapshot
         raise IndexError(f"Index {index} out of range")
+
+    def validate_uniform_dt(self, rtol: float = 1e-3) -> float:
+        """
+        Validate that timesteps are uniform and return dt.
+
+        FW-H solver requires uniform timesteps for FFT-based spectral
+        differentiation. This method checks uniformity and raises an
+        error if timesteps vary beyond the tolerance.
+
+        Args:
+            rtol: Relative tolerance for timestep uniformity check
+
+        Returns:
+            dt: The uniform timestep value in seconds
+
+        Raises:
+            ValueError: If fewer than 2 timesteps or non-uniform spacing
+        """
+        times = self.metadata.times
+
+        if len(times) < 2:
+            raise ValueError("Need at least 2 timesteps for FW-H solver")
+
+        dt = times[1] - times[0]
+        diffs = torch.diff(times)
+
+        if not torch.allclose(diffs, dt, rtol=rtol):
+            max_dev = (diffs - dt).abs().max().item()
+            mean_dt = diffs.mean().item()
+            raise ValueError(
+                f"Non-uniform timesteps detected (max deviation: {max_dev:.2e}s, "
+                f"mean dt: {mean_dt:.6e}s).\n"
+                f"FW-H solver requires uniform dt for spectral differentiation.\n"
+                f"Consider resampling your CFD data to uniform intervals."
+            )
+
+        return dt.item()

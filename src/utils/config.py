@@ -11,6 +11,7 @@ class CaseConfig:
     """Physical case parameters."""
     c0: float = 340.0  # Speed of sound (m/s)
     rho0: float = 1.225  # Reference density (kg/m³)
+    p0: Optional[float] = None  # Reference pressure (Pa). None = use time-mean
 
 
 @dataclass
