@@ -148,6 +148,153 @@ def cmd_test_interp_all(args):
     return 0
 
 
+def cmd_solve(args):
+    """Run the FW-H acoustic solver."""
+    from pathlib import Path
+    import matplotlib.pyplot as plt
+    from src.utils.config import load_config, validate_config
+    from src.surfaces.parametric import cylinder, sphere, box
+    from src.surfaces.observers import ObserverArray
+    from src.loaders.xdmf import XDMFLoader
+    from src.solver import fwh_solve
+    from src.postprocessing import compute_oaspl, compute_spl
+
+    # Load and validate config
+    config_path = Path(args.config)
+    config = load_config(config_path)
+
+    issues = validate_config(config)
+    if issues:
+        print("Configuration issues:")
+        for issue in issues:
+            print(f"  - {issue}")
+        print("\nAborting.")
+        return 1
+
+    # Derive output paths from config filename
+    base_name = config_path.stem
+    output_h5 = config_path.parent / f"{base_name}_results.h5"
+    output_plot = config_path.parent / f"{base_name}_spl.png"
+
+    # Create surface
+    print("\n=== FW-H Solver ===")
+    print("Creating surface...")
+
+    if config.surface.type == 'cylinder':
+        surface = cylinder(
+            radius=config.surface.radius,
+            length=config.surface.length,
+            center=config.surface.center,
+            n_theta=config.surface.n_theta,
+            n_z=config.surface.n_z,
+            axis=config.surface.axis,
+            caps=config.surface.caps,
+            n_cap_radial=config.surface.n_cap_radial
+        )
+    elif config.surface.type == 'sphere':
+        surface = sphere(
+            radius=config.surface.radius,
+            center=config.surface.center,
+            n_theta=config.surface.n_theta,
+            n_phi=config.surface.n_phi
+        )
+    elif config.surface.type == 'box':
+        surface = box(
+            extents=config.surface.extents,
+            center=config.surface.center,
+            n_per_side=config.surface.n_per_side
+        )
+    else:
+        print(f"Unknown surface type: {config.surface.type}")
+        return 1
+
+    print(f"  {config.surface.type}: {surface.n_points:,} points, "
+          f"area={surface.total_area:.4f}, spacing={surface.mean_spacing:.6f}")
+
+    # Create observers
+    print("Creating observers...")
+
+    if config.observers.type == 'arc':
+        observers = ObserverArray.arc(
+            radius=config.observers.radius,
+            n=config.observers.n,
+            plane=config.observers.plane,
+            center=config.observers.center,
+            theta_range=config.observers.theta_range
+        )
+    elif config.observers.type == 'sphere':
+        observers = ObserverArray.sphere(
+            radius=config.observers.radius,
+            n_theta=config.observers.n_theta,
+            n_phi=config.observers.n_phi,
+            center=config.observers.center
+        )
+    elif config.observers.type == 'line':
+        observers = ObserverArray.line(
+            start=config.observers.start,
+            end=config.observers.end,
+            n=config.observers.n
+        )
+    elif config.observers.type == 'file':
+        observers = ObserverArray.from_file(config.observers.file_path)
+    else:
+        print(f"Unknown observer type: {config.observers.type}")
+        return 1
+
+    print(f"  {config.observers.type}: {observers.n_observers} observers")
+
+    # Create loader
+    print("Loading CFD data...")
+
+    data_path = Path(config.data.path)
+    if config.data.format == 'xdmf' or data_path.suffix.lower() == '.xdmf':
+        loader = XDMFLoader(data_path)
+    else:
+        print(f"Unknown data format: {config.data.format}")
+        return 1
+
+    meta = loader.metadata
+    print(f"  {meta.n_points:,} points, {meta.n_timesteps} timesteps, "
+          f"dt={meta.dt:.6e}s")
+
+    # Run solver
+    print("\nRunning FW-H solver...")
+
+    result = fwh_solve(
+        surface=surface,
+        observers=observers,
+        loader=loader,
+        config=config,
+        verbose=True
+    )
+
+    # Compute OASPL for summary
+    oaspl = compute_oaspl(result.pressure)
+    print(f"\nOASPL range: [{oaspl.min().item():.1f}, {oaspl.max().item():.1f}] dB")
+
+    # Save results
+    print(f"\nSaving results to {output_h5}...")
+    result.to_hdf5(output_h5)
+
+    # Save SPL plot
+    freqs, spl = compute_spl(result.pressure[0], result.dt)
+
+    plt.figure(figsize=(10, 6))
+    plt.semilogx(freqs.numpy(), spl.numpy())
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('SPL (dB re 20 μPa)')
+    plt.title(f'SPL Spectrum - {result.observer_labels[0]}')
+    plt.grid(True, which='both', alpha=0.3)
+    plt.xlim([10, freqs[-1].item()])
+    plt.savefig(output_plot, dpi=150, bbox_inches='tight')
+    plt.close()
+
+    print(f"SPL plot saved to {output_plot}")
+    print("Done!")
+
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='PyTorch FW-H Aeroacoustics Solver',
@@ -243,6 +390,17 @@ def main():
         help='Continue even if config validation fails'
     )
 
+    # Solve command
+    solve_parser = subparsers.add_parser(
+        'solve',
+        help='Run the FW-H acoustic solver'
+    )
+    solve_parser.add_argument(
+        '--config', '-c',
+        required=True,
+        help='Path to configuration JSON file'
+    )
+
     args = parser.parse_args()
 
     if args.command is None:
@@ -257,6 +415,8 @@ def main():
         return cmd_surface(args)
     elif args.command == 'test-interp-all':
         return cmd_test_interp_all(args)
+    elif args.command == 'solve':
+        return cmd_solve(args)
     else:
         parser.print_help()
         return 1
