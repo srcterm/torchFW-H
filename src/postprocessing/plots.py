@@ -484,3 +484,312 @@ def plot_setup_slices(
             print(f"Saved slice plot to: {save_path}")
 
         return fig
+
+
+def plot_psd(
+    frequencies: Tensor,
+    psd: Tensor,
+    labels: Optional[list] = None,
+    title: str = "Power Spectral Density",
+    p_ref: float = 20e-6,
+    figsize: Tuple[float, float] = (10, 6),
+    save_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Plot Power Spectral Density vs frequency.
+
+    Args:
+        frequencies: (N_freq,) frequency array in Hz
+        psd: (N_freq,) or (N_obs, N_freq) PSD values in Pa^2/Hz
+        labels: Optional list of observer labels
+        title: Plot title
+        p_ref: Reference pressure for dB conversion (default 20 uPa)
+        figsize: Figure size (width, height)
+        save_path: Optional path to save figure
+
+    Returns:
+        Matplotlib figure
+    """
+    freqs_np = _tensor_to_numpy(frequencies)
+    psd_np = _tensor_to_numpy(psd)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Handle single vs multiple observers
+    if psd_np.ndim == 1:
+        psd_np = psd_np[np.newaxis, :]
+
+    n_obs = psd_np.shape[0]
+
+    # Convert to dB/Hz referenced to p_ref^2
+    psd_db = 10 * np.log10(np.clip(psd_np, 1e-40, None) / (p_ref ** 2))
+
+    # Use different colors for each observer
+    colors = plt.cm.tab10(np.linspace(0, 1, min(n_obs, 10)))
+
+    for i in range(n_obs):
+        label = labels[i] if labels else f"Observer {i+1}"
+        color = colors[i % len(colors)]
+        ax.semilogx(freqs_np, psd_db[i], label=label, color=color)
+
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("PSD (dB/Hz re 20 uPa)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+    if n_obs <= 10:
+        ax.legend()
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved PSD plot to: {save_path}")
+
+    return fig
+
+
+def plot_spl(
+    frequencies: Tensor,
+    spl: Tensor,
+    labels: Optional[list] = None,
+    title: str = "SPL Spectrum",
+    figsize: Tuple[float, float] = (10, 6),
+    save_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Plot SPL vs frequency spectrum.
+
+    Args:
+        frequencies: (N_freq,) frequency array in Hz
+        spl: (N_freq,) or (N_obs, N_freq) SPL values in dB
+        labels: Optional list of observer labels
+        title: Plot title
+        figsize: Figure size (width, height)
+        save_path: Optional path to save figure
+
+    Returns:
+        Matplotlib figure
+    """
+    freqs_np = _tensor_to_numpy(frequencies)
+    spl_np = _tensor_to_numpy(spl)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Handle single vs multiple observers
+    if spl_np.ndim == 1:
+        spl_np = spl_np[np.newaxis, :]
+
+    n_obs = spl_np.shape[0]
+
+    # Use different colors for each observer
+    colors = plt.cm.tab10(np.linspace(0, 1, min(n_obs, 10)))
+
+    for i in range(n_obs):
+        label = labels[i] if labels else f"Observer {i+1}"
+        color = colors[i % len(colors)]
+        ax.semilogx(freqs_np, spl_np[i], label=label, color=color)
+
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("SPL (dB re 20 uPa)")
+    ax.set_title(title)
+    ax.grid(True, alpha=0.3)
+
+    if n_obs <= 10:
+        ax.legend()
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved SPL plot to: {save_path}")
+
+    return fig
+
+
+def plot_directivity(
+    observer_positions: Tensor,
+    levels: Tensor,
+    plane: str = 'xy',
+    center: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    title: str = "Directivity Pattern",
+    figsize: Tuple[float, float] = (8, 8),
+    save_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Plot polar directivity pattern from observer OASPL or SPL values.
+
+    Args:
+        observer_positions: (N_obs, 3) observer positions
+        levels: (N_obs,) OASPL or SPL values in dB for each observer
+        plane: Projection plane ('xy', 'xz', or 'yz')
+        center: Reference center point for angle computation
+        title: Plot title
+        figsize: Figure size
+        save_path: Optional path to save figure
+
+    Returns:
+        Matplotlib figure
+    """
+    obs_np = _tensor_to_numpy(observer_positions)
+    levels_np = _tensor_to_numpy(levels)
+    center_np = np.array(center)
+
+    # Compute relative positions
+    rel_pos = obs_np - center_np
+
+    # Get angles based on plane
+    plane = plane.lower()
+    if plane == 'xy':
+        angles = np.arctan2(rel_pos[:, 1], rel_pos[:, 0])
+    elif plane == 'xz':
+        angles = np.arctan2(rel_pos[:, 2], rel_pos[:, 0])
+    elif plane == 'yz':
+        angles = np.arctan2(rel_pos[:, 2], rel_pos[:, 1])
+    else:
+        raise ValueError(f"plane must be 'xy', 'xz', or 'yz', got '{plane}'")
+
+    # Sort by angle for smooth line
+    sort_idx = np.argsort(angles)
+    angles_sorted = angles[sort_idx]
+    levels_sorted = levels_np[sort_idx]
+
+    # Close the loop
+    angles_plot = np.concatenate([angles_sorted, [angles_sorted[0]]])
+    levels_plot = np.concatenate([levels_sorted, [levels_sorted[0]]])
+
+    fig, ax = plt.subplots(figsize=figsize, subplot_kw={'projection': 'polar'})
+
+    ax.plot(angles_plot, levels_plot, 'b-', linewidth=2)
+    ax.scatter(angles_sorted, levels_sorted, c='blue', s=30, zorder=5)
+
+    # Set radial limits with some padding
+    level_min = levels_np.min()
+    level_max = levels_np.max()
+    level_range = level_max - level_min
+    ax.set_rlim(level_min - 0.1 * level_range, level_max + 0.1 * level_range)
+
+    ax.set_title(title, pad=20)
+    ax.set_theta_zero_location('E')  # 0 degrees at right (standard)
+    ax.set_theta_direction(1)  # Counter-clockwise
+
+    # Add plane label
+    ax.text(0.02, 0.98, f'{plane.upper()} plane', transform=ax.transAxes,
+            fontsize=10, verticalalignment='top')
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved directivity plot to: {save_path}")
+
+    return fig
+
+
+def compute_source_rms(
+    source_terms: 'FWHSourceTerms'
+) -> Tuple[Tensor, Tensor]:
+    """
+    Compute RMS of source terms for surface visualization.
+
+    Args:
+        source_terms: FWHSourceTerms from compute_source_terms
+
+    Returns:
+        Q_rms: (N_s,) RMS of mass flux Q over time
+        L_rms: (N_s,) RMS of loading magnitude |L| over time
+    """
+    import torch
+
+    # Q RMS: sqrt(mean(Q^2)) over time axis
+    Q_rms = torch.sqrt((source_terms.Q ** 2).mean(dim=1))
+
+    # L magnitude at each timestep, then RMS
+    L_mag = torch.linalg.norm(source_terms.L, dim=-1)  # (N_s, N_t)
+    L_rms = torch.sqrt((L_mag ** 2).mean(dim=1))  # (N_s,)
+
+    return Q_rms, L_rms
+
+
+def plot_source_distribution(
+    surface: 'PermeableSurface',
+    source_terms: 'FWHSourceTerms',
+    field: str = 'Q',
+    title: Optional[str] = None,
+    cmap: str = 'hot',
+    figsize: Tuple[float, float] = (10, 8),
+    save_path: Optional[str] = None
+) -> plt.Figure:
+    """
+    Plot source term distribution on the FW-H surface.
+
+    Args:
+        surface: PermeableSurface
+        source_terms: FWHSourceTerms from compute_source_terms
+        field: Which field to plot ('Q' for mass flux, 'L' for loading)
+        title: Plot title (auto-generated if None)
+        cmap: Colormap
+        figsize: Figure size
+        save_path: Optional path to save figure
+
+    Returns:
+        Matplotlib figure
+    """
+    from mpl_toolkits.mplot3d import Axes3D
+
+    Q_rms, L_rms = compute_source_rms(source_terms)
+
+    if field.upper() == 'Q':
+        values = _tensor_to_numpy(Q_rms)
+        field_label = 'Mass Flux RMS |Q|'
+        units = 'kg/(m²·s)'
+    elif field.upper() == 'L':
+        values = _tensor_to_numpy(L_rms)
+        field_label = 'Loading RMS |L|'
+        units = 'Pa'
+    else:
+        raise ValueError(f"field must be 'Q' or 'L', got '{field}'")
+
+    points = _tensor_to_numpy(surface.points)
+
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection='3d')
+
+    scatter = ax.scatter(
+        points[:, 0], points[:, 1], points[:, 2],
+        c=values, cmap=cmap, s=10
+    )
+
+    cbar = plt.colorbar(scatter, ax=ax, shrink=0.6, pad=0.1)
+    cbar.set_label(f'{field_label} ({units})')
+
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_zlabel('Z (m)')
+
+    if title is None:
+        title = f'Source Distribution: {field_label}'
+    ax.set_title(title)
+
+    # Equal aspect ratio
+    max_range = np.array([
+        points[:, 0].max() - points[:, 0].min(),
+        points[:, 1].max() - points[:, 1].min(),
+        points[:, 2].max() - points[:, 2].min()
+    ]).max() / 2.0
+
+    mid_x = (points[:, 0].max() + points[:, 0].min()) / 2
+    mid_y = (points[:, 1].max() + points[:, 1].min()) / 2
+    mid_z = (points[:, 2].max() + points[:, 2].min()) / 2
+
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved source distribution plot to: {save_path}")
+
+    return fig

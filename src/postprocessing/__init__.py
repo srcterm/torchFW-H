@@ -1,4 +1,15 @@
-from .plots import plot_surface, plot_observers, plot_cfd_slice, plot_setup, plot_setup_slices
+from .plots import (
+    plot_surface,
+    plot_observers,
+    plot_cfd_slice,
+    plot_setup,
+    plot_setup_slices,
+    plot_spl,
+    plot_psd,
+    plot_directivity,
+    plot_source_distribution,
+    compute_source_rms,
+)
 from .spectra import (
     compute_spl,
     compute_oaspl,
@@ -16,6 +27,11 @@ __all__ = [
     'plot_cfd_slice',
     'plot_setup',
     'plot_setup_slices',
+    'plot_spl',
+    'plot_psd',
+    'plot_directivity',
+    'plot_source_distribution',
+    'compute_source_rms',
     # Spectra
     'compute_spl',
     'compute_oaspl',
